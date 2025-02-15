@@ -12,6 +12,6 @@
   </p> 
 
 ## Dataset: 
-Hugging Face Emoji Dataset: https://huggingface.co/datasets/valhalla/emoji-datase </br>
+Hugging Face Emoji Dataset: https://huggingface.co/datasets/valhalla/emoji-dataset </br>
 Initial labels: 2,749
 
