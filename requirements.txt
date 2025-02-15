@@ -1,0 +1,5 @@
+pip install --upgrade huggingface_hub
+pip install matplotlib
+pip install fastparquet
+pip install pyarrow
+pip install pandas
