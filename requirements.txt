@@ -3,3 +3,7 @@ pip install matplotlib
 pip install fastparquet
 pip install pyarrow
 pip install pandas
+pip install torch
+pip install torchattacks
+pip install torchvision
+pip install scikit-learn
