@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader, random_split, Dataset
 import torchvision.transforms as transforms
 from datasets import load_dataset
 from PIL import Image
+import matplotlib.pyplot as plt
 
 # ---------------------------
 #  Hyperparameters
@@ -140,10 +141,10 @@ class ConvAutoencoder(nn.Module):
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = ConvAutoencoder(latent_dim=128).to(device)  # Adjust latent_dim as needed
 
-# Use MSE loss
+# MSE loss
 criterion = nn.MSELoss()
 
-# Use Adam optimizer with weight decay (L2 regularization)
+# Adam optimizer with weight decay (L2 regularization)
 optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
 
 # ---------------------------
@@ -151,6 +152,8 @@ optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
 # ---------------------------
 
 num_epochs = 20  
+train_losses = []
+val_losses = []
 
 for epoch in range(num_epochs):
     model.train()
@@ -163,7 +166,8 @@ for epoch in range(num_epochs):
         loss.backward()
         optimizer.step()
         train_loss += loss.item() * data.size(0)
-    train_loss /= len(train_dataset)
+    epoch_train_loss = train_loss / len(train_loader)
+    train_losses.append(epoch_train_loss)
     
     # Validation
     model.eval()
@@ -174,21 +178,66 @@ for epoch in range(num_epochs):
             output = model(data)
             loss = criterion(output, data)
             val_loss += loss.item() * data.size(0)
-    val_loss /= len(val_dataset)
+    epoch_val_loss = val_loss / len(val_loader)
+    val_losses.append(epoch_val_loss)
     
-    print(f"Epoch [{epoch+1}/{num_epochs}], Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+    print(f"Epoch [{epoch+1}/{num_epochs}], Train Loss: {epoch_train_loss:.4f}, Val Loss: {epoch_val_loss:.4f}")
 
 # ---------------------------
-# 7. Test loop
+# 7. Plot Learning Curves
+# ---------------------------
+
+plt.figure(figsize=(10, 5))
+plt.plot(range(1, num_epochs+1), train_losses, label='Train Loss')
+plt.plot(range(1, num_epochs+1), val_losses, label='Validation Loss')
+plt.xlabel('Epoch')
+plt.ylabel('MSE Loss')
+plt.title('Learning Curves')
+plt.legend()
+plt.show()
+
+# ---------------------------
+# 8. Evaluate on Test Set
 # ---------------------------
 
 model.eval()
-test_loss = 0.0
+total_test_loss = 0.0
 with torch.no_grad():
     for data in test_loader:
         data = data.to(device)
         output = model(data)
         loss = criterion(output, data)
-        test_loss += loss.item() * data.size(0)
-test_loss /= len(test_dataset)
-print(f"Test Loss: {test_loss:.4f}")
+        total_test_loss += loss.item() * data.size(0)
+final_test_loss = total_test_loss / len(test_dataset)
+print(f"Final Average Test MSE: {final_test_loss:.4f}")
+
+# ---------------------------
+# 9. Side-by-Side Example of 5 Input and Output Images
+# ---------------------------
+
+# Get one batch from the test loader
+data_iter = iter(test_loader)
+images = next(data_iter)
+images = images.to(device)
+with torch.no_grad():
+    reconstructions = model(images)
+
+# Move to CPU and convert to numpy arrays for plotting
+images_np = images.cpu().numpy().transpose(0, 2, 3, 1)
+recon_np = reconstructions.cpu().numpy().transpose(0, 2, 3, 1)
+
+# Plot the first 5 images and their reconstructions
+num_examples = 5
+fig, axes = plt.subplots(2, num_examples, figsize=(15, 6))
+for i in range(num_examples):
+    # Original image
+    axes[0, i].imshow(images_np[i])
+    axes[0, i].axis('off')
+    # Reconstructed image
+    axes[1, i].imshow(recon_np[i])
+    axes[1, i].axis('off')
+
+axes[0, 0].set_title('Original')
+axes[1, 0].set_title('Reconstructed')
+plt.suptitle("Side-by-Side Input (Top) and Output (Bottom) Examples")
+plt.show()
