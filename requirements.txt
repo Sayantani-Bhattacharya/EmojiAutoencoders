@@ -7,3 +7,4 @@ pip install torch
 pip install torchattacks
 pip install torchvision
 pip install scikit-learn
+pip install datasets 
