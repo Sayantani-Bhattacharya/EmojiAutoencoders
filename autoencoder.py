@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, random_split, Dataset
 import torchvision.transforms as transforms
-from datasets import load_dataset
+from datasets import load_dataset, concatenate_datasets
 from PIL import Image
 import matplotlib.pyplot as plt
 
@@ -23,20 +23,20 @@ import matplotlib.pyplot as plt
 # 10. num_epochs = 20
 
 # ---------------------------
-# 1. Data Loading and Filtering
+# 0. Data Loading and Filtering
 # ---------------------------
 
 # Load the Hugging Face Emoji dataset.
 hf_dataset = load_dataset("valhalla/emoji-dataset")
 
-# Keyword to filter the images.
+# Keyword to filter the images into subgroups.
 keyword = "face"
 def filter_fn(example):
     return keyword.lower() in example["text"].lower()
 filtered_dataset = hf_dataset["train"].filter(filter_fn)
 
 # ---------------------------
-# 2. Create a PyTorch Dataset Wrapper
+# 1. Create a PyTorch Dataset Wrapper
 # ---------------------------
 
 class EmojiDataset(Dataset):
@@ -54,6 +54,30 @@ class EmojiDataset(Dataset):
             image = self.transform(image)
         return image
 
+    @classmethod
+    def concatenate(cls, dataset1, dataset2, transform=None):
+        """
+        Concatenates two EmojiDataset instances into one.
+        
+        Args:
+            dataset1 (EmojiDataset): The first dataset instance.
+            dataset2 (EmojiDataset): The second dataset instance.
+            transform (callable, optional): The transform to apply. If not provided,
+                dataset1's transform will be used.
+        
+        Returns:
+            EmojiDataset: A new EmojiDataset instance with the concatenated data.
+        """
+        # Concatenate the underlying Hugging Face datasets
+        new_hf_dataset = concatenate_datasets([dataset1.dataset, dataset2.dataset])
+        
+        # Decide which transform to use
+        new_transform = transform if transform is not None else dataset1.transform
+        
+        # Return a new instance of EmojiDataset with the concatenated dataset
+        return cls(new_hf_dataset, transform=new_transform)
+    
+
 # Define image transforms:
 # - Resize images to 64x64.
 # - Convert them to tensors and normalize to [0,1]
@@ -61,20 +85,55 @@ transform = transforms.Compose([
     transforms.Resize((64, 64)),
     transforms.ToTensor(),
 ])
-
 # Create final dataset.
-emoji_dataset = EmojiDataset(filtered_dataset, transform=transform)
+original_dataset = EmojiDataset(filtered_dataset, transform=transform)
+
+
+# ---------------------------
+# 2. Add Data Augmentation
+# ---------------------------
+
+
+# Define data augmentation transformations
+data_augmentation = transforms.Compose([
+    transforms.Resize((64, 64)),
+    transforms.ToTensor(),
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomRotation(10),
+    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+])
+augmented_datasets = []
+previous_dataset = original_dataset #Just a placeholder value.
+
+# Run augmentation 4 times to create 4 copies per original image.
+num_copies = 4
+for i in range(num_copies):
+    aug_dataset = EmojiDataset(filtered_dataset, transform=data_augmentation)
+    if (i > 0):
+        print("i is: ", i)        
+        augmented_datasets = EmojiDataset.concatenate(previous_dataset,aug_dataset)
+        previous_dataset = augmented_datasets
+    else:
+        previous_dataset = aug_dataset  
+    
+final_dataset = EmojiDataset.concatenate(original_dataset,augmented_datasets)
+
+print("/////////////////////////////////")
+print(f"Original dataset size: {len(original_dataset)}")
+print(f"Augmented dataset size: {len(augmented_datasets)}")
+print(f"Final dataset size: {len(final_dataset)}")
+
 
 # ---------------------------
 # 3. Split the Dataset (60/20/20)
 # ---------------------------
 
-dataset_length = len(emoji_dataset)
+dataset_length = len(final_dataset)
 n_train = int(0.6 * dataset_length)
 n_val = int(0.2 * dataset_length)
 n_test = dataset_length - n_train - n_val
 
-train_dataset, val_dataset, test_dataset = random_split(emoji_dataset, [n_train, n_val, n_test])
+train_dataset, val_dataset, test_dataset = random_split(final_dataset, [n_train, n_val, n_test])
 
 # Create DataLoaders
 batch_size = 64
@@ -194,7 +253,7 @@ plt.xlabel('Epoch')
 plt.ylabel('MSE Loss')
 plt.title('Learning Curves')
 plt.legend()
-plt.show()
+plt.savefig("results/plot.png")
 
 # ---------------------------
 # 8. Evaluate on Test Set
@@ -240,4 +299,4 @@ for i in range(num_examples):
 axes[0, 0].set_title('Original')
 axes[1, 0].set_title('Reconstructed')
 plt.suptitle("Side-by-Side Input (Top) and Output (Bottom) Examples")
-plt.show()
+plt.savefig("results/autoencoder_results.png")
