@@ -206,7 +206,7 @@ optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
 # 6. Training and Validation Loops
 # ---------------------------
 
-num_epochs = 20  
+num_epochs = 20 #1
 train_losses = []
 val_losses = []
 
@@ -296,3 +296,110 @@ axes[0, 0].set_title('Original')
 axes[1, 0].set_title('Reconstructed')
 plt.suptitle("Side-by-Side Input (Top) and Output (Bottom) Examples")
 plt.savefig("results/autoencoder_results.png")
+
+
+# ---------------------------
+# 10. Attribute selection
+# ---------------------------
+
+inputImg_str = "grinning face"
+attribute_str = "heart shaped eyes"
+baseline_str = "slightly smiling face"
+featuredImg_str = "smiling face with heart shaped eyes"
+
+
+def filter_fn(example):
+    return keyword.lower() in example["text"].lower()
+keyword = inputImg_str
+input_image = hf_dataset["train"].filter(filter_fn)
+keyword = baseline_str
+baseline_image = hf_dataset["train"].filter(filter_fn)
+keyword = attribute_str
+attribute_image = hf_dataset["train"].filter(filter_fn)
+keyword = featuredImg_str
+featured_image = hf_dataset["train"].filter(filter_fn)
+
+# input_image = filtered_dataset[filtered_dataset["text"].str.contains("grinning face", case=False, na=False)][0]
+# baseline_image = filtered_dataset[filtered_dataset["text"].str.contains("slightly smiling face", case=False, na=False)][0:1] 
+# attribute_image = filtered_dataset[filtered_dataset["text"].str.contains("heart shaped eyes", case=False, na=False)][0]
+# featured_image = filtered_dataset[filtered_dataset["text"].str.contains("smiling face with heart shaped eyes", case=False, na=False)][0]
+
+transform = transforms.Compose([
+    transforms.Resize((64, 64)),
+    transforms.ToTensor(),
+])
+# Convert img into tensors.
+input = EmojiDataset(filtered_dataset, transform=transform)
+input = input[0]
+baseline = EmojiDataset(filtered_dataset, transform=transform)
+baseline = baseline[0]
+attribute = EmojiDataset(filtered_dataset, transform=transform)
+attribute = attribute[0]
+featuredImg = EmojiDataset(filtered_dataset, transform=transform)
+featuredImg = featuredImg[0]
+
+# baseline = transform(baseline_image["image"])
+# attribute = transform(attribute_image["image"])
+# featuredImg = transform(featured_image["image"])
+
+# ---------------------------
+# 11. Vector Arithmetic
+# ---------------------------
+
+# Compute latent representations
+model.eval()
+input = input.to(device)
+z_input = model.encoder(input)
+z_input = z_input.view(z_input.size(0), -1)
+z_input = model.fc1(z_input)
+z_input = model.dropout(z_input)
+baseline = baseline.to(device)
+z_baseline = model.encoder(baseline)
+z_baseline = z_baseline.view(z_baseline.size(0), -1)
+z_baseline = model.fc1(z_baseline)
+z_baseline = model.dropout(z_baseline)
+attribute = attribute.to(device)
+z_attribute = model.encoder(attribute)
+z_attribute = z_attribute.view(z_attribute.size(0), -1)
+z_attribute = model.fc1(z_attribute)
+z_attribute = model.dropout(z_attribute)
+featuredImg = featuredImg.to(device)
+z_featuredImg = model.encoder(featuredImg)
+z_featuredImg = z_featuredImg.view(z_featuredImg.size(0), -1)
+z_featuredImg = model.fc1(z_featuredImg)
+z_featuredImg = model.dropout(z_featuredImg)
+
+# Performing vector arithmetic
+# attribute = featuredImg - baseline
+# compositeImg = inputImg + attribute
+
+z_compositeImg = z_input + (z_featuredImg - z_baseline)
+
+
+# ---------------------------
+# 12. Image Generation
+# ---------------------------
+
+# Decode the composite image
+
+compositeImg = model.fc2(z_compositeImg)
+compositeImg = compositeImg.view(compositeImg.size(0), 256, 4, 4)
+compositeImg = model.decoder(compositeImg)
+
+with torch.no_grad():
+    composite_np = compositeImg.cpu().numpy().transpose(0, 2, 3, 1)
+
+# Also get input image for comparison
+input_np = input.cpu().numpy().transpose(1, 2, 0)
+
+# Plotting the target and composite images side-by-side
+import matplotlib.pyplot as plt
+fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+axes[0].imshow(input_np[0])
+axes[0].axis('off')
+axes[0].set_title('Original Target')
+axes[1].imshow(composite_np[0])
+axes[1].axis('off')
+axes[1].set_title('Composite with Glasses')
+plt.suptitle("Attribute Composition via Latent Vector Arithmetic")
+plt.savefig("results3/attribute_composition.png")
