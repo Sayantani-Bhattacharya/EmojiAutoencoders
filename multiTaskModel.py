@@ -129,11 +129,10 @@ augmented_datasets = []
 previous_dataset = original_dataset #Just a placeholder value.
 
 # Run augmentation 4 times to create 4 copies per original image.
-num_copies = 4
+num_copies = 50
 for i in range(num_copies):
     aug_dataset = EmojiDataset(filtered_dataset, transform=data_augmentation)
     if (i > 0):
-        print("i is: ", i)        
         augmented_datasets = EmojiDataset.concatenate(previous_dataset,aug_dataset)
         previous_dataset = augmented_datasets
     else:
@@ -362,17 +361,21 @@ print(f"Final Average Test MSE: {final_test_loss:.4f}, Test Accuracy: {final_tes
 # 9. Side-by-Side Example of 5 Input and Output Images
 # ---------------------------
 
-# Get one batch from the test loader
-data_iter = iter(test_loader)
-images, class_labels = next(data_iter)
-images = images.to(device)
 with torch.no_grad():
-    reconstructions, pred_class = model(images)
+    for batch in test_loader:
+            features, class_labels = batch  # Extract features & labels   
+            features = features.to(device)
+            class_labels = class_labels.to(device)    
+            optimizer.zero_grad()
+            reconstructed, pred_class = model(features)
 
 # Move to CPU and convert to numpy arrays for plotting
-images_np = images.cpu().numpy().transpose(0, 2, 3, 1)
-recon_np = reconstructions.cpu().numpy().transpose(0, 2, 3, 1)
+images_np = features.cpu().numpy().transpose(0, 2, 3, 1)
+recon_np = reconstructed.cpu().numpy().transpose(0, 2, 3, 1)
 
+original_labels = class_labels.cpu().numpy()
+predicted_labels = pred_class.argmax(dim=1).cpu().numpy()
+label_mapping = {0: "Happy Face", 1: "Sad Face"}
 # Plot the first 5 images and their reconstructions
 num_examples = 5
 fig, axes = plt.subplots(2, num_examples, figsize=(15, 6))
@@ -380,9 +383,11 @@ for i in range(num_examples):
     # Original image
     axes[0, i].imshow(images_np[i])
     axes[0, i].axis('off')
+    axes[0, i].set_title(f"Original: {label_mapping[original_labels[i]]}")
     # Reconstructed image
     axes[1, i].imshow(recon_np[i])
     axes[1, i].axis('off')
+    axes[1, i].set_title(f"Pred: {label_mapping[predicted_labels[i]]}")
 
 axes[0, 0].set_title('Original')
 axes[1, 0].set_title('Reconstructed')
