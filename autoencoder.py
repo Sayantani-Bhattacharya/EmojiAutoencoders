@@ -105,7 +105,7 @@ augmented_datasets = []
 previous_dataset = original_dataset #Just a placeholder value.
 
 # Run augmentation 4 times to create 4 copies per original image.
-num_copies = 4
+num_copies = 10
 for i in range(num_copies):
     aug_dataset = EmojiDataset(filtered_dataset, transform=data_augmentation)
     if (i > 0):       
@@ -205,7 +205,7 @@ optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
 # 6. Training and Validation Loops
 # ---------------------------
 
-num_epochs = 25 #1
+num_epochs = 30 #1
 train_losses = []
 val_losses = []
 
@@ -254,6 +254,7 @@ plt.savefig("results/plot.png")
 # 8. Evaluate on Test Set
 # ---------------------------
 
+# for this added more augmentated data. (4 to 10 per image)
 model.eval()
 total_test_loss = 0.0
 with torch.no_grad():
@@ -301,9 +302,8 @@ plt.savefig("results/autoencoder_results.png")
 # 10. Attribute selection
 # ---------------------------
 
-inputImg_str = "grinning face"
-attribute_str = "heart shaped eyes"
-baseline_str = "slightly smiling face"
+inputImg_str = "smiling cat face with open mouth"
+baseline_str = "grinning face"
 featuredImg_str = "smiling face with heart shaped eyes"
 
 
@@ -313,8 +313,6 @@ keyword = inputImg_str
 input_image = hf_dataset["train"].filter(filter_fn)
 keyword = baseline_str
 baseline_image = hf_dataset["train"].filter(filter_fn)
-keyword = attribute_str
-attribute_image = hf_dataset["train"].filter(filter_fn)
 keyword = featuredImg_str
 featured_image = hf_dataset["train"].filter(filter_fn)
 
@@ -326,7 +324,6 @@ transform = transforms.Compose([
 # Convert img into tensors.
 input = EmojiDataset(input_image, transform=transform)
 baseline = EmojiDataset(baseline_image, transform=transform)
-attribute = EmojiDataset(attribute_image, transform=transform)
 featuredImg = EmojiDataset(featured_image, transform=transform)
 
 # ---------------------------
@@ -351,13 +348,6 @@ z_baseline = z_baseline.view(z_baseline.size(0), -1)
 z_baseline = model.fc1(z_baseline)
 z_baseline = model.dropout(z_baseline)
 
-attribute = attribute[0]
-attribute = attribute.unsqueeze(0)
-attribute = attribute.to(device)
-z_attribute = model.encoder(attribute)
-z_attribute = z_attribute.view(z_attribute.size(0), -1)
-z_attribute = model.fc1(z_attribute)
-z_attribute = model.dropout(z_attribute)
 
 featuredImg = featuredImg[0]
 featuredImg = featuredImg.unsqueeze(0)
@@ -368,10 +358,9 @@ z_featuredImg = model.fc1(z_featuredImg)
 z_featuredImg = model.dropout(z_featuredImg)
 
 # Performing vector arithmetic
-# attribute = featuredImg - baseline
-# compositeImg = inputImg + attribute
 
-z_compositeImg = z_input + (z_featuredImg - z_baseline)
+z_attribute =  z_featuredImg - z_baseline
+z_compositeImg = z_input + z_attribute
 
 
 # ---------------------------
@@ -383,18 +372,39 @@ z_compositeImg = z_input + (z_featuredImg - z_baseline)
 compositeImg = model.fc2(z_compositeImg)
 compositeImg = compositeImg.view(compositeImg.size(0), 256, 4, 4)
 compositeImg = model.decoder(compositeImg)
-
 with torch.no_grad():
     composite_np = compositeImg.cpu().numpy().transpose(0, 2, 3, 1)
-
 # Also get input image for comparison
 img_tensor = img_tensor.to(device)
 input_np = img_tensor.cpu().detach().squeeze(0).permute(1, 2, 0).numpy()
+# for baseline image
+baseline = baseline.to(device)
+baseline_np = baseline.cpu().detach().squeeze(0).permute(1, 2, 0).numpy()
+# for featured image
+featuredImg = featuredImg.to(device)
+featuredImg_np = featuredImg.cpu().detach().squeeze(0).permute(1, 2, 0).numpy()
+
+import numpy as np
+# Plotting the images
+fig, axes = plt.subplots(2, 2, figsize=(10, 10))
+axes[0, 0].imshow(np.clip(input_np, 0, 1))
+axes[0, 0].axis('off')
+axes[0, 0].set_title('Original Target')
+axes[0, 1].imshow(np.clip(baseline_np, 0, 1))
+axes[0, 1].axis('off')
+axes[0, 1].set_title('Baseline Image')
+axes[1, 0].imshow(np.clip(featuredImg_np, 0, 1))
+axes[1, 0].axis('off')
+axes[1, 0].set_title('Featured Image')
+axes[1, 1].imshow(np.clip(composite_np[0], 0, 1))
+axes[1, 1].axis('off')
+axes[1, 1].set_title('Composite Image')
+plt.suptitle("Latent Vector Arithmetic")
+plt.savefig("results3/latent_vector_arithmetic.png")
+
 
 # Plotting the target and composite images side-by-side
-import numpy as np
 fig, axes = plt.subplots(1, 2, figsize=(10, 5))
-
 axes[0].imshow(np.clip(input_np, 0, 1))
 axes[0].axis('off')
 axes[0].set_title('Original Target')
