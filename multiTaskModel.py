@@ -18,9 +18,12 @@ import matplotlib.pyplot as plt
 # 5. probability of dropout.
 # 6. latenet dimension.
 # 7. activation function.: reLu.
-# 8. learning rate.: 1e-3
-# 9. weight decay: 1e-5
-# 10. num_epochs = 20
+# 8. learning_rate = 0.001
+# 9. batch_size = 64
+# 10. hidden_dim = 128
+# 11. num_epochs = 20
+# 12. lambda_classification = 0.5  
+
 
 # ---------------------------
 # 0. Data Loading and Filtering
@@ -28,15 +31,33 @@ import matplotlib.pyplot as plt
 
 # Load the Hugging Face Emoji dataset.
 hf_dataset = load_dataset("valhalla/emoji-dataset")
-
-# Keyword to filter the images into subgroups.
 keyword = "face"
 def filter_fn(example):
     return keyword.lower() in example["text"].lower()
 filtered_dataset = hf_dataset["train"].filter(filter_fn)
 
 # ---------------------------
-# 1. Create a PyTorch Dataset Wrapper
+# 1. Classifying the data
+# ---------------------------
+
+class_mapping = {
+    "happy face": 0, "grinning face": 0, "smiling face": 0,   # Class 0: Happy
+    "sad face": 1, "crying face": 1, "frowning face" : 1       # Class 1: Sad
+}
+
+def assign_class(example):
+    description = example["text"].lower()
+    for key, label in class_mapping.items():
+        if key in description:
+            return label
+    return -1  # Unknown or unlabeled cases
+
+filtered_dataset = filtered_dataset.map(lambda x: {"class_label": assign_class(x)})
+# Remove unlabeled data
+filtered_dataset = filtered_dataset.filter(lambda x: x["class_label"] != -1)  
+
+# ---------------------------
+# 2. Create a PyTorch Dataset Wrapper
 # ---------------------------
 
 class EmojiDataset(Dataset):
@@ -50,9 +71,12 @@ class EmojiDataset(Dataset):
     def __getitem__(self, idx):
         item = self.dataset[idx]
         image = item["image"]
+        # class_label = item["class_label"]
+        class_label = torch.tensor(self.dataset[idx]["class_label"], dtype=torch.long)
+       
         if self.transform:
             image = self.transform(image)
-        return image
+        return image, class_label
 
     @classmethod
     def concatenate(cls, dataset1, dataset2, transform=None):
@@ -90,7 +114,7 @@ original_dataset = EmojiDataset(filtered_dataset, transform=transform)
 
 
 # ---------------------------
-# 2. Add Data Augmentation
+# 3. Add Data Augmentation
 # ---------------------------
 
 # Define data augmentation transformations
@@ -126,6 +150,7 @@ print(f"Final dataset size: {len(final_dataset)}")
 # 3. Split the Dataset (60/20/20)
 # ---------------------------
 
+
 dataset_length = len(final_dataset)
 n_train = int(0.6 * dataset_length)
 n_val = int(0.2 * dataset_length)
@@ -139,13 +164,21 @@ train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 val_loader   = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 test_loader  = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
+
 # ---------------------------
-# 4. Convolutional Autoencoder
+# 4. Multitask Autoencoder
 # ---------------------------
 
-class ConvAutoencoder(nn.Module):
-    def __init__(self, latent_dim=128):  
-        super(ConvAutoencoder, self).__init__()
+import torch.nn as nn
+
+'''
+Loss Functions:
+    1. MSELoss() for regression.
+    2. CrossEntropyLoss() for classification.
+'''
+class MultiTaskAutoencoder(nn.Module):
+    def __init__(self, latent_dim=128, num_classes=2):
+        super(MultiTaskAutoencoder, self).__init__()
         self.latent_dim = latent_dim
         
         # Encoder: Input size (3, 64, 64)
@@ -177,79 +210,123 @@ class ConvAutoencoder(nn.Module):
             nn.ConvTranspose2d(32, 3, kernel_size=3, stride=2, padding=1, output_padding=1),     # -> (3, 64, 64)
             nn.Sigmoid()  # Ensure outputs are between 0 and 1
         )
-    
-    def forward(self, x):
-        # Encode
-        x_enc = self.encoder(x)
-        x_enc = x_enc.view(x_enc.size(0), -1)
-        latent = self.fc1(x_enc)
-        latent = self.dropout(latent)  # Applying dropout for regularization
         
-        # Decode
-        x_dec = self.fc2(latent)
-        x_dec = x_dec.view(x_dec.size(0), 256, 4, 4)
-        x_recon = self.decoder(x_dec)
-        return x_recon
+        # Classification
+        self.classifier = nn.Linear(latent_dim, num_classes)
+
+    def forward(self, x):
+        latent = self.encoder(x)
+        latent = latent.view(latent.shape[0], -1)
+        latent = self.fc1(latent)
+
+        reconstructed = self.fc2(latent)  # Map back to (256 * 4 * 4)
+        reconstructed = reconstructed.view(latent.shape[0], 256, 4, 4)
+        reconstructed = self.decoder(reconstructed)
+
+        classification = self.classifier(latent)
+        return reconstructed, classification
+
 
 # ---------------------------
 # 5. Training Setup
 # ---------------------------
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = ConvAutoencoder(latent_dim=128).to(device)  
+model = MultiTaskAutoencoder(latent_dim=128).to(device)  
+
 # MSE loss
-criterion = nn.MSELoss()
-# Adam optimizer with weight decay (L2 regularization)
-optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
+criterion_mse = nn.MSELoss()
+criterion_classification = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+num_epochs = 10 #20
+learning_rate = 0.001
+lambda_classification = 0.5
 
 # ---------------------------
 # 6. Training and Validation Loops
 # ---------------------------
 
-num_epochs = 20  
 train_losses = []
 val_losses = []
+train_accuracies = []
+val_accuracies = []
 
 for epoch in range(num_epochs):
     model.train()
     train_loss = 0.0
-    for data in train_loader:
-        data = data.to(device)
+    for batch in train_loader:
+        features, class_labels = batch  # Extract features & labels
+        features = features.to(device)
+        class_labels = class_labels.to(device)       
         optimizer.zero_grad()
-        output = model(data)
-        loss = criterion(output, data)
+        reconstructed, pred_class = model(features)
+        loss_mse = criterion_mse(reconstructed, features)  # Autoencoder loss
+        loss_classification = criterion_classification(pred_class, class_labels)  # Classification loss
+        # Combine losses
+        loss = loss_mse + lambda_classification * loss_classification
         loss.backward()
         optimizer.step()
-        train_loss += loss.item() * data.size(0)
+        train_loss += loss.item() * features.size(0)
+        # Calculate training accuracy
+        _, predicted = torch.max(pred_class, 1)
+        correct = (predicted == class_labels).sum().item()
+        epoch_train_accuracy = correct / len(class_labels)
+    train_accuracies.append(epoch_train_accuracy)
     epoch_train_loss = train_loss / len(train_loader)
     train_losses.append(epoch_train_loss)
-    
-    # Validation
+
+    # Validation step
     model.eval()
     val_loss = 0.0
     with torch.no_grad():
-        for data in val_loader:
-            data = data.to(device)
-            output = model(data)
-            loss = criterion(output, data)
-            val_loss += loss.item() * data.size(0)
+        for batch in val_loader:            
+            features, class_labels = batch  # Extract features & labels 
+            features = features.to(device)
+            class_labels = class_labels.to(device)      
+            optimizer.zero_grad()
+            reconstructed, pred_class = model(features)
+            loss_mse = criterion_mse(reconstructed, features)  # Autoencoder loss
+            loss_classification = criterion_classification(pred_class, class_labels)  # Classification loss
+            # Combine losses
+            loss = loss_mse + lambda_classification * loss_classification
+            val_loss += loss.item() * features.size(0)
+            # Calculate validation accuracy
+            _, predicted = torch.max(pred_class, 1)
+            correct = (predicted == class_labels).sum().item()
+            epoch_val_accuracy = correct / len(class_labels)
+    val_accuracies.append(epoch_val_accuracy)
     epoch_val_loss = val_loss / len(val_loader)
     val_losses.append(epoch_val_loss)
-    
-    print(f"Epoch [{epoch+1}/{num_epochs}], Train Loss: {epoch_train_loss:.4f}, Val Loss: {epoch_val_loss:.4f}")
+
+    print(f"Epoch [{epoch+1}/{num_epochs}], Train Loss: {epoch_train_loss:.4f}, Val Loss: {epoch_val_loss:.4f}, Train Accuracy: {epoch_train_accuracy:.4f}, Val Accuracy: {epoch_val_accuracy:.4f}")
+
 
 # ---------------------------
 # 7. Plot Learning Curves
 # ---------------------------
 
-plt.figure(figsize=(10, 5))
+
+epochs = range(num_epochs)
+
+plt.figure(figsize=(12, 5))
+plt.subplot(1, 2, 1)
 plt.plot(range(1, num_epochs+1), train_losses, label='Train Loss')
 plt.plot(range(1, num_epochs+1), val_losses, label='Validation Loss')
 plt.xlabel('Epoch')
 plt.ylabel('MSE Loss')
 plt.title('Learning Curves')
 plt.legend()
-plt.savefig("results/plot.png")
+# plt.savefig("results2/MSEplot.png")
+
+plt.subplot(1, 2, 2)
+plt.plot(range(1, num_epochs+1), train_accuracies, label="Classification Training Accuracy")
+plt.plot(range(1, num_epochs+1), val_accuracies, label="Classification Validation Accuracy")
+plt.xlabel('Epoch')
+plt.ylabel("Accuracy")
+plt.title('Learning Curves')
+plt.legend()
+plt.savefig("results2/plot.png")
+
 
 # ---------------------------
 # 8. Evaluate on Test Set
@@ -257,14 +334,29 @@ plt.savefig("results/plot.png")
 
 model.eval()
 total_test_loss = 0.0
+test_loss = 0.0
 with torch.no_grad():
-    for data in test_loader:
-        data = data.to(device)
-        output = model(data)
-        loss = criterion(output, data)
-        total_test_loss += loss.item() * data.size(0)
-final_test_loss = total_test_loss / len(test_dataset)
-print(f"Final Average Test MSE: {final_test_loss:.4f}")
+    for batch in test_loader:
+        features, class_labels = batch  # Extract features & labels   
+        features = features.to(device)
+        class_labels = class_labels.to(device)    
+        optimizer.zero_grad()
+        reconstructed, pred_class = model(features)
+        loss_mse = criterion_mse(reconstructed, features)  # Autoencoder loss
+        loss_classification = criterion_classification(pred_class, class_labels)  # Classification loss
+        # Combine losses
+        loss = loss_mse + lambda_classification * loss_classification
+        test_loss += loss.item() * features.size(0)
+        # Calculate test accuracy
+        _, predicted = torch.max(pred_class, 1)
+        correct = (predicted == class_labels).sum().item()
+        test_accuracy = correct / len(class_labels)
+
+final_test_loss = test_loss / len(test_loader)
+final_test_accuracy = test_accuracy
+print(f"Final Average Test MSE: {final_test_loss:.4f}, Test Accuracy: {final_test_accuracy:.4f}")
+
+
 
 # ---------------------------
 # 9. Side-by-Side Example of 5 Input and Output Images
@@ -272,10 +364,10 @@ print(f"Final Average Test MSE: {final_test_loss:.4f}")
 
 # Get one batch from the test loader
 data_iter = iter(test_loader)
-images = next(data_iter)
+images, class_labels = next(data_iter)
 images = images.to(device)
 with torch.no_grad():
-    reconstructions = model(images)
+    reconstructions, pred_class = model(images)
 
 # Move to CPU and convert to numpy arrays for plotting
 images_np = images.cpu().numpy().transpose(0, 2, 3, 1)
@@ -295,4 +387,13 @@ for i in range(num_examples):
 axes[0, 0].set_title('Original')
 axes[1, 0].set_title('Reconstructed')
 plt.suptitle("Side-by-Side Input (Top) and Output (Bottom) Examples")
-plt.savefig("results/autoencoder_results.png")
+plt.savefig("results2/autoencoder_results.png")
+
+
+
+
+
+
+
+
+
