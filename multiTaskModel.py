@@ -355,6 +355,7 @@ final_test_loss = test_loss / len(test_loader)
 final_test_accuracy = test_accuracy
 print(f"Final Average Test MSE: {final_test_loss:.4f}, Test Accuracy: {final_test_accuracy:.4f}")
 
+torch.save(model.state_dict(), "weights2/model_weights.pth")
 
 
 # ---------------------------
